@@ -64,3 +64,7 @@ def compute_ssim_np(img1, img2, cs_map=False):
 def compute_ssim_tf(img1, img2):
     return tf.image.ssim(img1,img2, max_val=1.0)
     #return tf.image.ssim(img1,img2, max_val=2.0)
+
+def grad_ex(img):
+    #gradient_extractor
+    return img

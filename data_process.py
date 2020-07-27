@@ -4,7 +4,6 @@ import os
 import glob 
 
 
-
 train_img_data_dir = '../train_data/DIV2K_train_LR_bicubic/*.png'
 train_label_data_dir = '../train_data/DIV2K_train_HR/*.png'
 valid_img_data_dir = '../DIV2K_valid_LR_bicubic/*.png'
@@ -32,8 +31,11 @@ def process_path(img_file_path, label_file_path):
   # load the raw data from the file as a string
   img = tf.io.read_file(img_file_path)
   img = decode_img(img, False)
+  img = tf.nn.space_to_depth(img, 4)
   return img, label
+
 import random
+
 def randomCrop(img, mask, width, height,bicubic_upsampled=False):
     #assert img.shape[0] >= height
     #assert img.shape[1] >= width
@@ -69,8 +71,7 @@ def make_dataset(img_file_path, label_file_path, train=True, batch_size=128, fee
   ds = tf.data.Dataset.zip((ds1, ds2))
   if train:
     train_labeled_ds = ds.shuffle(800).map(process_path, num_parallel_calls=10).map(random_crop_size64).batch(batch_size).prefetch(10)
-
-#    train_labeled_ds = ds.shuffle(800).map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE).map(random_crop_size64).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    #train_labeled_ds = ds.shuffle(10).map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(batch_size).prefech(10)
     return train_labeled_ds
 
   else:
@@ -78,3 +79,8 @@ def make_dataset(img_file_path, label_file_path, train=True, batch_size=128, fee
 
 #    valid_labeled_ds = ds.map(process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE).batch(1).prefetch(tf.data.experimental.AUTOTUNE)
     return valid_labeled_ds
+
+def make_dataset_unsupervised(pan_file_path, ms_file_path, train=True, batch_size=1):
+  ds1 = tf.data.Dataset.list_files(pan_file_path, shuffle=False)
+  ds2 = tf.data.Dataset.list_files(ms_file_path, shuffle=False)
+  ds = tf.data.Dataset.zip((ds1, ds2))
