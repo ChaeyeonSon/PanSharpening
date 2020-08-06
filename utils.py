@@ -49,7 +49,7 @@ def compute_psnr_tf(ref,target):
 #    psnr = 20. * (tf.log(2. / mse) / tf.log(10.))
 
 #    psnr = tf.image.psnr(ref[0],target[0],max_val=2.0)
-    psnr = tf.image.psnr(ref[0],target[0],max_val=1.0)
+    psnr = tf.image.psnr(ref,target,max_val=1.0)
 
 #    psnr = tf.image.psnr(ref[0],target[0],max_val=2.0)
     return psnr
@@ -68,3 +68,16 @@ def compute_ssim_tf(img1, img2):
 def grad_ex(img):
     #gradient_extractor
     return img
+
+def guided_filter(img):
+    return None
+
+def space_to_depth(x, block_size):
+    x = np.asarray(x)
+    height, width = x.shape
+    reduced_height = height // block_size
+    reduced_width = width // block_size
+    y = x.reshape(reduced_height, block_size,
+                         reduced_width, block_size)
+    z = np.swapaxes(y, 1, 2).reshape(reduced_height, reduced_width, -1)
+    return z

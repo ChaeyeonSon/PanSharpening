@@ -3,7 +3,9 @@ import tensorflow as tf
 from utils import *
 import os
 from data_process import *
-import tensorflow.contrib.slim as slim
+# import tensorflow.contrib.slim as slim
+from tqdm import tqdm
+import time
 
 # Refer to https://github.com/trevor-m/tensorflow-SRGAN/blob/master/srgan.py
 # Refer to https://github.com/tegg89/SRCNN-Tensorflow/blob/master/model.py 
@@ -130,8 +132,8 @@ class UPSNet:
     # detail loss
     content_loss = tf.reduce_sum(tf.abs(grad_ex(pan)-grad_ex(ps_gray))) #mean? sum?
     # dual-gradient loss
-    r_loss = tf.minimum(tf.abs(grad_ex(pan)-grad_ex(ps[0])),tf.abs(-grad_ex(pan)-grad_ex(ps[0]])))
-    g_loss = tf.minimum(tf.abs(grad_ex(pan)-grad_ex(ps[1])),tf.abs(-grad_ex(pan)-grad_ex(ps[1]])))
+    r_loss = tf.minimum(tf.abs(grad_ex(pan)-grad_ex(ps[0])),tf.abs(-grad_ex(pan)-grad_ex(ps[0])))
+    g_loss = tf.minimum(tf.abs(grad_ex(pan)-grad_ex(ps[1])),tf.abs(-grad_ex(pan)-grad_ex(ps[1])))
     b_loss = tf.minimum(tf.abs(grad_ex(pan)-grad_ex(ps[2])),tf.abs(-grad_ex(pan)-grad_ex(ps[2])))
     content_loss += tf.reduce_sum(r_loss+g_loss+b_loss)
     # color loss
@@ -145,17 +147,16 @@ class UPSNet:
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, scope='generator')
     with tf.control_dependencies(update_ops):
       return tf.train.AdamOptimizer(self.learning_rate).minimize(loss, var_list=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator'))
+
   def psnr(self, x, y):
-    return utils.compute_psnr_tf(x, y)
+    return compute_psnr_tf(x, y)
 
   def make_summary(self, scope, x, y, pred, loss, psnr):
     with tf.name_scope(scope):
-      ts1= tf.summary.image('input', train_x)
-      ts2 = tf.summary.image('target', train_y)
-      ts3 = tf.summary.image('outputs', tf.clip_by_value(train_pred,0,1))
-      loss_avg = tf.placeholder(tf.float32,name=scope+"_loss_avg")
+      ts1= tf.summary.image('input', x)
+      ts2 = tf.summary.image('target', y)
+      ts3 = tf.summary.image('outputs', tf.clip_by_value(pred,0,1))
       ts_loss = tf.summary.scalar('loss', loss)
-      psnr_avg = tf.placeholder(tf.float32,name=scope+"_psnr_avg")
       ts_psnr = tf.summary.scalar('psnr', psnr)
 
     img_merged = tf.summary.merge([ts1, ts2, ts3])
@@ -164,7 +165,6 @@ class UPSNet:
 
 
   def training(self, sess, FLAGS, train_x, train_y, valid_x, valid_y):
-    train_x, train_y = train_data
     train_pred = self.forward(train_x, True, reuse=False)
     train_loss = self.loss_function(train_y, train_pred)
     train_psnr = self.psnr(train_pred, train_y)
@@ -173,7 +173,6 @@ class UPSNet:
     train_psnr_avg = tf.placeholder(tf.float32)
     train_img, train_scalar = self.make_summary("train_summary", train_x, train_y, train_pred, train_loss_avg, train_psnr_avg)
 
-    valid_x, valid_y = valid_data
     valid_pred = self.forward(valid_x, False, reuse=True)
     valid_loss = self.loss_function(valid_y, valid_pred) 
     valid_psnr = self.psnr(valid_pred, valid_y)
@@ -226,9 +225,13 @@ class UPSNet:
       
       self.save(sess, saver, os.path.join(FLAGS.checkpoint_dir,FLAGS.model_name), epoch)
       
+      writer.add_summary(train_img_summary,epoch)
+      writer.add_summary(valid_img_summary,epoch)
+      
       train_summary = sess.run(train_scalar, feed_dict={train_loss_avg: t_loss, train_psnr_avg: t_psnr})
       valid_summary = sess.run(valid_scalar, feed_dict={valid_loss_avg: v_loss, valid_psnr_avg: v_psnr})
-      writer.add_summary([train_img_summary, valid_img_summary, train_summary, valid_summary], epoch)
+      writer.add_summary(train_summary,epoch)
+      writer.add_summary(valid_summary,epoch)
 
   def save(self, sess, saver, checkpoint_dir, step):
     if not os.path.exists(checkpoint_dir):
@@ -285,7 +288,7 @@ class SRGenerator:
   def forward(self, x, is_train, reuse,global_connection=True):
     """Builds the forward pass network graph"""
 #    with tf.variable_scope('generator', reuse=tf.AUTO_REUSE) as scope:
-    with tf.variable_scope('generator', reuse=reuse) as scope:
+    with tf.variable_scope('generator', reuse=reuse):
       x = tf.layers.conv2d(x, kernel_size=9, filters=64, strides=1, padding='same')
       x = tf.nn.relu(x)
       #x = tf.contrib.keras.layers.PReLU(shared_axes=[1,2])(x)
@@ -303,7 +306,7 @@ class SRGenerator:
         x = x + skip
 
       # Upsample blocks
-      for i in range(self.num_upsamples-1):
+      for i in range(self.num_upsamples//2):
         with tf.name_scope("Upsample_"+str(i)):
           x = self._Upsample2xBlock(x, kernel_size=3, filters=256)
       
@@ -311,6 +314,12 @@ class SRGenerator:
 
     return x
   
+  def psnr(self, x, y):
+    return compute_psnr_tf(x, y)
+
+  def ssim(self, x,y):
+    return compute_ssim_tf(x,y)
+
   def loss_function(self, y, y_pred):
     """Loss function"""
     # if self.use_gan:
@@ -338,7 +347,7 @@ class SRGenerator:
 
     diff = extracted_feature_gen - extracted_feature_target
     if self.content_loss == 'MSE':
-        content_loss = tf.reduce_mean(tf.reduce_sum(tf.square(diff), axis=[3]))
+        content_loss = tf.reduce_mean(tf.square(diff))
     else:
         content_loss = 0.0061*tf.reduce_mean(tf.reduce_sum(tf.square(diff), axis=[3]))
     return content_loss
@@ -349,6 +358,129 @@ class SRGenerator:
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, scope='generator')
     with tf.control_dependencies(update_ops):
       return tf.train.AdamOptimizer(self.learning_rate).minimize(loss, var_list=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator'))
+
+  def make_summary(self, scope, x, y, pred, loss, psnr,ssim):
+    with tf.name_scope(scope):
+      ts1= tf.summary.image('input', x)
+      ts2 = tf.summary.image('target', y)
+      ts3 = tf.summary.image('outputs', tf.clip_by_value(pred,0,1))
+      ts_loss = tf.summary.scalar('loss', loss)
+      ts_psnr = tf.summary.scalar('psnr', psnr)
+      ts_ssim = tf.summary.scalar('ssim', ssim)
+
+    img_merged = tf.summary.merge([ts1, ts2, ts3])
+    scalar_merged = tf.summary.merge([ts_loss,ts_psnr, ts_ssim])
+    return img_merged, scalar_merged
+
+  def make_it(self, is_train, train_img_dir, train_label_dir, valid_img_dir, valid_label_dir):
+    if is_train:
+      train_dataset = make_dataset_ps(train_img_dir, train_label_dir, train=True)
+      valid_dataset = make_dataset_ps(valid_img_dir, valid_label_dir, train=False) 
+      return train_dataset.make_initializable_iterator(), valid_dataset.make_initializable_iterator()
+    else:
+      valid_dataset =  make_dataset_ps(valid_img_dir, valid_label_dir, train=False) 
+      return valid_dataset.make_initializable_iterator()
+
+  def training(self, sess, FLAGS):
+    if FLAGS.is_train:
+      train_it, valid_it = self.make_it(True,FLAGS.train_img_dir, FLAGS.train_img_dir, \
+                                        FLAGS.valid_img_dir, FLAGS.valid_img_dir)
+      train_x, train_y = train_it.get_next()
+
+      train_pred = self.forward(train_x, True, reuse=False)
+      train_loss = self.loss_function(train_y, train_pred)
+      train_psnr = self.psnr(train_pred, train_y)
+      train_ssim = self.ssim(train_pred, train_y)
+      train_op = self.optimize(train_loss)
+
+      train_loss_avg = tf.placeholder(tf.float32)
+      train_psnr_avg = tf.placeholder(tf.float32)
+      train_ssim_avg = tf.placeholder(tf.float32)
+      train_img, train_scalar = self.make_summary("train_summary", train_x, train_y, train_pred, train_loss_avg, train_psnr_avg, train_ssim_avg)
+
+    else:
+      valid_it = self.make_it(False, None, None, FLAGS.test_img_dir, FLAGS.test_img_dir)
+    valid_x, valid_y = valid_it.get_next()
+    
+    valid_pred = self.forward(valid_x, False, reuse=True)
+    valid_loss = self.loss_function(valid_y, valid_pred) 
+    valid_psnr = self.psnr(valid_pred, valid_y)
+    valid_ssim = self.ssim(valid_pred, valid_y)
+    if FLAGS.is_train:
+      valid_loss_avg = tf.placeholder(tf.float32)
+      valid_psnr_avg = tf.placeholder(tf.float32)
+      valid_ssim_avg = tf.placeholder(tf.float32)
+      valid_img, valid_scalar = self.make_summary("valid_summary", valid_x, valid_y, valid_pred, valid_loss_avg, valid_psnr_avg, valid_ssim_avg)
+      writer = tf.summary.FileWriter('./board/graph/'+FLAGS.model_name, sess.graph)
+      writer.add_graph(sess.graph)
+
+    var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='generator')
+    saver = tf.train.Saver(var_list)
+
+    sess.run(tf.global_variables_initializer())
+    loaded, start_epoch = self.load(sess, saver, os.path.join(FLAGS.checkpoint_dir,FLAGS.model_name))
+    if loaded:
+        print(" [*] Load SUCCESS")
+    else:
+        print(" [!] Load failed...")
+
+    for epoch in tqdm(range(start_epoch,FLAGS.epochs)):
+      start_time = time.time()
+      t_loss, t_psnr, t_ssim, v_loss, v_psnr, v_ssim = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+      if FLAGS.is_train:
+        sess.run(train_it.initializer)      
+        count = 0
+        try:
+            while True:
+                _, loss, psnr, ssim, train_img_summary = sess.run([train_op, train_loss, train_psnr, train_ssim, train_img])
+                t_loss += loss
+                t_psnr += np.mean(psnr)
+                t_ssim += np.mean(ssim)
+                count += 1
+        except tf.errors.OutOfRangeError:
+            pass
+        t_loss /= count
+        t_psnr /= count
+        t_ssim /= count
+      else:
+        f = open(FLAGS.sample_dir+"/result.txt","w")
+      sess.run(valid_it.initializer)
+      count = 0
+      while True:
+          try:
+              if FLAGS.is_train:
+                loss, psnr, ssim, valid_img_summary = sess.run([valid_loss, valid_psnr, valid_ssim, valid_img])
+              else:
+                loss, psnr, ssim, x, y, pred = sess.run([valid_loss, valid_psnr, valid_ssim, valid_x, valid_y, valid_pred])
+              v_loss += loss
+              v_psnr += np.mean(psnr)
+              v_ssim += np.mean(ssim)
+              count += 1 
+              if not FLAGS.is_train:
+                save_image(FLAGS.sample_dir+"/LR_"+str(count)+".jpg", x[0])
+                save_image(FLAGS.sample_dir+"/HR_"+str(count)+".jpg", y[0])
+                save_image(FLAGS.sample_dir+"/pred_"+str(count)+".jpg", pred[0])
+                f.write("%dth img => time: [%4.4f], loss: [%.8f], psnr: [%.4f], bicubic_psnr: [%.4f], ssim: [%.4f], bicubic_ssim: [%.4f]\n"% ((count), time.time()-start_time, loss, psnr, bic_psnr, ssim, bic_ssim))
+          except tf.errors.OutOfRangeError:
+              break
+      v_loss /= count
+      v_psnr /= count
+      v_ssim /= count
+      if FLAGS.is_train:
+        print("Epoch: [%2d], time: [%4.4f], train_loss: [%.8f], train_psnr: [%.4f],train_ssim: [%.4f], valid_loss: [%.8f], valid_psnr: [%.4f], valid_ssim: [%.4f]"% ((epoch+1), time.time()-start_time, t_loss, t_psnr, t_ssim, v_loss, v_psnr, v_ssim))
+      else:
+        f.write("Avg. Loss : %.8f, Avg. PSNR : %.4f, Avg. SSIM : %.4f"%(v_loss/count, v_psnr/count, v_ssim/count))
+        f.close()
+        break    
+      self.save(sess, saver, os.path.join(FLAGS.checkpoint_dir,FLAGS.model_name), epoch)
+      
+      writer.add_summary(train_img_summary,epoch)
+      writer.add_summary(valid_img_summary,epoch)
+      
+      train_summary = sess.run(train_scalar, feed_dict={train_loss_avg: t_loss, train_psnr_avg: t_psnr, train_ssim_avg: t_ssim})
+      valid_summary = sess.run(valid_scalar, feed_dict={valid_loss_avg: v_loss, valid_psnr_avg: v_psnr, valid_ssim_avg: v_ssim})
+      writer.add_summary(train_summary,epoch)
+      writer.add_summary(valid_summary,epoch)
 
   def save(self, sess, saver, checkpoint_dir, step):
     model_name = "SRResNet"
