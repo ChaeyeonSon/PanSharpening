@@ -17,9 +17,9 @@ def save_image(path, data, highres=False):
     data = np.clip(data * 255.0, 0.0, 255.0).astype(np.uint8)
     imageio.imwrite(path, data)
 
-def bicubic_upsample_x2_np(images):
+def bicubic_upsample_np(images, factor):
     #input is numpy 3D array
-    dim = (images.shape[1]*2, images.shape[0]*2)
+    dim = (images.shape[1]*factor, images.shape[0]*factor)
     return cv2.resize(images, dim, interpolation=cv2.INTER_CUBIC)
     #return NotImplement
 
@@ -81,3 +81,28 @@ def space_to_depth(x, block_size):
                          reduced_width, block_size)
     z = np.swapaxes(y, 1, 2).reshape(reduced_height, reduced_width, -1)
     return z
+
+def hp_filter(img, ksize=(5,5)):
+    blur = cv2.blur(img, ksize)
+    if blur.shape != img.shape:
+        blur=blur[:,:,np.newaxis]
+    return img-blur
+
+def downsampling(img, factor):
+    width, height, depth = img.shape
+    # print(img.shape,"down")
+    gb = cv2.GaussianBlur(img,(5,5),1/factor)
+    result = np.zeros((width//factor, height//factor, depth))
+    # print(gb.shape, result.shape, "down")
+    for i in range(width//factor):
+        for j in range(height//factor):
+            result[i,j,:] = np.mean(np.mean(gb[i*factor:(i+1)*factor, j*factor:(j+1)*factor], axis=0), axis=0)
+    return result
+  
+def normalize(img, channels):
+    m_std=np.zeros(channels)
+    for i in range(channels):
+        m_std[i]=np.std(img[:,:,i]) 
+        m_mean=np.mean(np.mean(img, axis=0), axis=0)
+        img_out = (img-m_mean)/m_std
+    return img_out
